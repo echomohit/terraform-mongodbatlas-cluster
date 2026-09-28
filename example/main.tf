@@ -53,9 +53,27 @@ module "mongodb" {
     }
   }
 
+  # Continuous Cloud Backup / point-in-time restore (optional)
+  enable_continuous_backup = true
+
   # Cross-region backup copy (optional)
   enable_backup_copy      = false
   backup_copy_region_name = null
+
+  # Database users (optional)
+  database_users = {
+    "app-service" = {
+      roles = [{ role_name = "readWrite", database_name = "app" }]
+    }
+    # AWS IAM authentication — no password; the app authenticates with its IAM role.
+    # "arn:aws:iam::123456789012:role/app-task-role" = {
+    #   aws_iam_type = "ROLE"
+    #   roles        = [{ role_name = "readWrite", database_name = "app" }]
+    # }
+  }
+  database_user_passwords = {
+    "app-service" = var.app_service_db_password
+  }
 
   # PrivateLink (optional)
   enable_privatelink  = false

@@ -12,7 +12,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'ethicalmohit'
+    if: github.repository_owner == 'echomohit'
     permissions:
       contents: write
     steps:

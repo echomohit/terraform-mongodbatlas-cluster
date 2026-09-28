@@ -28,3 +28,9 @@ variable "mongodb_atlas_private_key" {
   sensitive   = true
   default     = ""
 }
+
+variable "app_service_db_password" {
+  description = "Password for the example app-service database user"
+  type        = string
+  sensitive   = true
+}

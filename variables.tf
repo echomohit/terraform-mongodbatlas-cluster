@@ -85,6 +85,12 @@ variable "enable_backup" {
   default     = true
 }
 
+variable "enable_continuous_backup" {
+  description = "Whether to enable Continuous Cloud Backup (point-in-time restore) on the cluster. Required for restore_window_days to take effect. null leaves the current Atlas setting untouched."
+  type        = bool
+  default     = null
+}
+
 variable "restore_window_days" {
   description = "Number of days back in time you can restore to with Continuous Cloud Backup."
   type        = number
@@ -165,4 +171,58 @@ variable "backup_policies" {
       frequency_interval = 12
     }
   }
+}
+
+# Database users
+
+variable "database_users" {
+  description = <<-EOT
+    Map of database users to manage, keyed by username. For AWS IAM authentication, the key is the
+    IAM role or user ARN and auth_database_name is forced to "$external".
+
+    Passwords for SCRAM users are passed separately through database_user_passwords so this map stays
+    non-sensitive. Omit a user's password only when importing an existing user whose password should
+    be left unchanged.
+
+    Example:
+    {
+      "app-service" = {
+        roles = [{ role_name = "readWrite", database_name = "app" }]
+      }
+      "arn:aws:iam::123456789012:role/app-task-role" = {
+        aws_iam_type = "ROLE"
+        roles        = [{ role_name = "readWrite", database_name = "app" }]
+      }
+    }
+  EOT
+  type = map(object({
+    auth_database_name = optional(string, "admin")
+    aws_iam_type       = optional(string, "NONE")
+    description        = optional(string)
+    scope_to_cluster   = optional(bool, true)
+    labels             = optional(map(string), {})
+    roles = list(object({
+      role_name       = string
+      database_name   = string
+      collection_name = optional(string)
+    }))
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for u in values(var.database_users) : contains(["NONE", "USER", "ROLE"], u.aws_iam_type)])
+    error_message = "aws_iam_type must be one of NONE, USER, or ROLE."
+  }
+
+  validation {
+    condition     = alltrue([for u in values(var.database_users) : length(u.roles) > 0])
+    error_message = "Each database user must have at least one role."
+  }
+}
+
+variable "database_user_passwords" {
+  description = "Map of username to password for SCRAM (non-IAM) users in database_users."
+  type        = map(string)
+  default     = {}
+  sensitive   = true
 }

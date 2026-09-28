@@ -1,6 +1,6 @@
 # terraform-mongodbatlas-cluster
 
-A Terraform module for provisioning a production-ready MongoDB Atlas cluster with optional PrivateLink and automated backup schedules.
+A Terraform module for provisioning a production-ready MongoDB Atlas cluster with optional PrivateLink, automated backup schedules, and database user management.
 
 ## Features
 
@@ -8,7 +8,8 @@ A Terraform module for provisioning a production-ready MongoDB Atlas cluster wit
 - Compute and disk auto-scaling
 - Optional PrivateLink endpoint (AWS, Azure, GCP)
 - Configurable Cloud Backup Schedule with hourly, daily, weekly, and monthly policies
-- Optional cross-region backup copy
+- Optional Continuous Cloud Backup (point-in-time restore) and cross-region backup copy
+- Database users with SCRAM passwords or AWS IAM authentication, scoped to the cluster
 - Supports MongoDB 6.0, 7.0, and 8.0
 - Plan-time validation for provider name, MongoDB version, and node count
 
@@ -129,13 +130,16 @@ See the [example](./example) directory for a complete runnable configuration.
 | enable_privatelink | Create a PrivateLink endpoint and service | `bool` | `false` | no |
 | region_code | Region code for the PrivateLink endpoint | `string` | `null` | no |
 | endpoint_service_id | VPC endpoint service ID for PrivateLink | `string` | `null` | no |
-| enable_backup | Create a Cloud Backup Schedule | `bool` | `true` | no |
+| enable_backup | Enable cloud backups on the cluster and create a Cloud Backup Schedule | `bool` | `true` | no |
+| enable_continuous_backup | Enable Continuous Cloud Backup (point-in-time restore); `null` leaves the Atlas setting unchanged | `bool` | `null` | no |
 | restore_window_days | Days back in time available for point-in-time restore | `number` | `2` | no |
 | backup_reference_hour_of_day | UTC hour (0–23) to start the backup window | `number` | `0` | no |
 | backup_reference_minute_of_hour | UTC minute (0–59) to start the backup window | `number` | `0` | no |
 | backup_policies | Map of backup policy items (hourly, daily, weekly, monthly) | `map(object)` | see below | no |
 | enable_backup_copy | Copy backups to a secondary region | `bool` | `false` | no |
 | backup_copy_region_name | Secondary region for backup copies | `string` | `null` | no |
+| database_users | Map of database users keyed by username (see below) | `map(object)` | `{}` | no |
+| database_user_passwords | Map of username to password for SCRAM users | `map(string)` (sensitive) | `{}` | no |
 
 ### mongodb_atlas_config
 
@@ -170,6 +174,42 @@ backup_policies = {
 }
 ```
 
+### database_users
+
+Keyed by username. Users are scoped to this cluster by default (`scope_to_cluster = true`). For AWS IAM authentication, use the IAM role/user ARN as the key and set `aws_iam_type`; `auth_database_name` is set to `$external` automatically and no password is needed.
+
+| Name | Description | Type | Default |
+|------|-------------|------|---------|
+| roles | List of `{ role_name, database_name, collection_name }` | `list(object)` | n/a |
+| auth_database_name | Authentication database for SCRAM users | `string` | `"admin"` |
+| aws_iam_type | `NONE`, `USER`, or `ROLE` | `string` | `"NONE"` |
+| description | User description | `string` | `null` |
+| scope_to_cluster | Restrict the user to this cluster only | `bool` | `true` |
+| labels | Key/value labels | `map(string)` | `{}` |
+
+```hcl
+database_users = {
+  "app-service" = {
+    roles = [{ role_name = "readWrite", database_name = "app" }]
+  }
+  "arn:aws:iam::123456789012:role/app-task-role" = {
+    aws_iam_type = "ROLE"
+    roles        = [{ role_name = "read", database_name = "app" }]
+  }
+}
+database_user_passwords = {
+  "app-service" = var.app_service_db_password
+}
+```
+
+To bring an existing user under Terraform, add it to `database_users` without a password and import it:
+
+```bash
+terraform import 'module.mongodb.mongodbatlas_database_user.this["app-service"]' '<PROJECT_ID>-app-service-admin'
+```
+
+With no password in config, Terraform leaves the user's existing password unchanged. Setting one later rotates it.
+
 ## Outputs
 
 | Name | Description | Sensitive |
@@ -187,6 +227,7 @@ backup_policies = {
 | privatelink_endpoint_service_id | PrivateLink endpoint service ID (null if disabled) | no |
 | backup_schedule_id | Cloud Backup Schedule ID (null if disabled) | no |
 | backup_schedule_details | Full backup schedule details (null if disabled) | yes |
+| database_usernames | Usernames of the managed database users | no |
 
 ## Requirements
 
@@ -212,7 +253,7 @@ curl --user "public-key:private-key" \
 
 - Add support for multi-region replication specs
 - Add support for sharded clusters
-- Add resources for database users and roles
+- Add support for custom database roles
 - Add support for network access lists and IP allowlists
 - Add support for VPC peering
 
