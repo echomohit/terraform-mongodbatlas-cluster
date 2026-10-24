@@ -81,3 +81,8 @@ output "database_usernames" {
   description = "Usernames of the database users managed by this module"
   value       = [for u in mongodbatlas_database_user.this : u.username]
 }
+
+output "custom_db_role_names" {
+  description = "Names of the custom database roles managed by this module"
+  value       = [for r in mongodbatlas_custom_db_role.this : r.role_name]
+}

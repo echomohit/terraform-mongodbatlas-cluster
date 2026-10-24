@@ -4,10 +4,20 @@ resource "mongodbatlas_advanced_cluster" "this" {
   cluster_type           = "REPLICASET"
   mongo_db_major_version = var.mongodb_version
 
+  # null leaves the current Atlas setting untouched.
+  termination_protection_enabled = var.termination_protection_enabled
+
   # Cloud backups must be enabled on the cluster for the backup schedule to apply.
   # null leaves the current Atlas setting untouched.
   backup_enabled = var.enable_backup ? true : null
   pit_enabled    = var.enable_backup ? var.enable_continuous_backup : null
+
+  dynamic "advanced_configuration" {
+    for_each = var.oplog_min_retention_hours != null ? [1] : []
+    content {
+      oplog_min_retention_hours = var.oplog_min_retention_hours
+    }
+  }
 
   replication_specs {
     zone_name = "Zone 1"
@@ -142,12 +152,17 @@ resource "mongodbatlas_cloud_backup_schedule" "this" {
 resource "mongodbatlas_database_user" "this" {
   for_each = var.database_users
 
+  # Users can reference custom roles, which must exist first.
+  depends_on = [mongodbatlas_custom_db_role.this]
+
   project_id         = var.project_id
   username           = each.key
   auth_database_name = each.value.aws_iam_type != "NONE" ? "$external" : each.value.auth_database_name
   aws_iam_type       = each.value.aws_iam_type
-  password           = each.value.aws_iam_type != "NONE" ? null : lookup(var.database_user_passwords, each.key, null)
-  description        = each.value.description
+  # try() rather than lookup(): a missing key must yield an unmarked null, or imported users
+  # without a password plan a phantom update on the sensitive-marked null.
+  password    = each.value.aws_iam_type != "NONE" ? null : try(var.database_user_passwords[each.key], null)
+  description = each.value.description
 
   dynamic "roles" {
     for_each = each.value.roles
@@ -159,10 +174,12 @@ resource "mongodbatlas_database_user" "this" {
   }
 
   dynamic "scopes" {
-    for_each = each.value.scope_to_cluster ? [1] : []
+    for_each = each.value.scopes != null ? each.value.scopes : (
+      each.value.scope_to_cluster ? [{ name = mongodbatlas_advanced_cluster.this.name, type = "CLUSTER" }] : []
+    )
     content {
-      name = mongodbatlas_advanced_cluster.this.name
-      type = "CLUSTER"
+      name = scopes.value.name
+      type = scopes.value.type
     }
   }
 
@@ -171,6 +188,63 @@ resource "mongodbatlas_database_user" "this" {
     content {
       key   = labels.key
       value = labels.value
+    }
+  }
+}
+
+resource "mongodbatlas_custom_db_role" "this" {
+  for_each = var.custom_db_roles
+
+  project_id = var.project_id
+  role_name  = each.key
+
+  dynamic "actions" {
+    for_each = each.value.actions
+    content {
+      action = actions.value.action
+
+      dynamic "resources" {
+        for_each = actions.value.resources
+        content {
+          cluster         = resources.value.cluster
+          database_name   = resources.value.database_name
+          collection_name = resources.value.collection_name
+        }
+      }
+    }
+  }
+
+  dynamic "inherited_roles" {
+    for_each = each.value.inherited_roles
+    content {
+      role_name     = inherited_roles.value.role_name
+      database_name = inherited_roles.value.database_name
+    }
+  }
+}
+
+resource "mongodbatlas_project_ip_access_list" "this" {
+  for_each = var.ip_access_list
+
+  project_id = var.project_id
+  cidr_block = can(regex("/", each.key)) ? each.key : null
+  ip_address = can(regex("/", each.key)) ? null : each.key
+  comment    = each.value.comment
+}
+
+resource "mongodbatlas_maintenance_window" "this" {
+  count = var.maintenance_window != null ? 1 : 0
+
+  project_id              = var.project_id
+  day_of_week             = var.maintenance_window.day_of_week
+  hour_of_day             = var.maintenance_window.hour_of_day
+  auto_defer_once_enabled = var.maintenance_window.auto_defer_once_enabled
+
+  dynamic "protected_hours" {
+    for_each = var.maintenance_window.protected_hours != null ? [var.maintenance_window.protected_hours] : []
+    content {
+      start_hour_of_day = protected_hours.value.start_hour_of_day
+      end_hour_of_day   = protected_hours.value.end_hour_of_day
     }
   }
 }
