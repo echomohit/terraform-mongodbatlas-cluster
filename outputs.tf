@@ -76,3 +76,8 @@ output "cluster_configuration" {
     privatelink_enabled = var.enable_privatelink
   }
 }
+
+output "database_usernames" {
+  description = "Usernames of the database users managed by this module"
+  value       = [for u in mongodbatlas_database_user.this : u.username]
+}

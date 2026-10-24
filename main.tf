@@ -4,6 +4,11 @@ resource "mongodbatlas_advanced_cluster" "this" {
   cluster_type           = "REPLICASET"
   mongo_db_major_version = var.mongodb_version
 
+  # Cloud backups must be enabled on the cluster for the backup schedule to apply.
+  # null leaves the current Atlas setting untouched.
+  backup_enabled = var.enable_backup ? true : null
+  pit_enabled    = var.enable_backup ? var.enable_continuous_backup : null
+
   replication_specs {
     zone_name = "Zone 1"
     region_configs {
@@ -130,6 +135,42 @@ resource "mongodbatlas_cloud_backup_schedule" "this" {
       retention_value    = policy_item_monthly.value.retention_value
       retention_unit     = policy_item_monthly.value.retention_unit
       frequency_interval = policy_item_monthly.value.frequency_interval
+    }
+  }
+}
+
+resource "mongodbatlas_database_user" "this" {
+  for_each = var.database_users
+
+  project_id         = var.project_id
+  username           = each.key
+  auth_database_name = each.value.aws_iam_type != "NONE" ? "$external" : each.value.auth_database_name
+  aws_iam_type       = each.value.aws_iam_type
+  password           = each.value.aws_iam_type != "NONE" ? null : lookup(var.database_user_passwords, each.key, null)
+  description        = each.value.description
+
+  dynamic "roles" {
+    for_each = each.value.roles
+    content {
+      role_name       = roles.value.role_name
+      database_name   = roles.value.database_name
+      collection_name = roles.value.collection_name
+    }
+  }
+
+  dynamic "scopes" {
+    for_each = each.value.scope_to_cluster ? [1] : []
+    content {
+      name = mongodbatlas_advanced_cluster.this.name
+      type = "CLUSTER"
+    }
+  }
+
+  dynamic "labels" {
+    for_each = each.value.labels
+    content {
+      key   = labels.key
+      value = labels.value
     }
   }
 }
