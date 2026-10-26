@@ -184,6 +184,9 @@ variable "database_users" {
     non-sensitive. Omit a user's password only when importing an existing user whose password should
     be left unchanged.
 
+    scopes overrides scope_to_cluster when set: [] means all clusters and data lakes in the project, or
+    list the clusters (type = "CLUSTER") / data lakes (type = "DATA_LAKE") the user may access.
+
     Example:
     {
       "app-service" = {
@@ -200,7 +203,11 @@ variable "database_users" {
     aws_iam_type       = optional(string, "NONE")
     description        = optional(string)
     scope_to_cluster   = optional(bool, true)
-    labels             = optional(map(string), {})
+    scopes = optional(list(object({
+      name = string
+      type = optional(string, "CLUSTER")
+    })))
+    labels = optional(map(string), {})
     roles = list(object({
       role_name       = string
       database_name   = string
@@ -225,4 +232,89 @@ variable "database_user_passwords" {
   type        = map(string)
   default     = {}
   sensitive   = true
+}
+
+# Cluster settings
+
+variable "termination_protection_enabled" {
+  description = "Whether to block deletion of the cluster. null leaves the current Atlas setting untouched."
+  type        = bool
+  default     = null
+}
+
+variable "oplog_min_retention_hours" {
+  description = "Minimum oplog retention window in hours. null leaves the current Atlas setting untouched."
+  type        = number
+  default     = null
+}
+
+# Project access
+
+variable "custom_db_roles" {
+  description = <<-EOT
+    Map of custom database roles keyed by role name. actions keeps the order Atlas returns them in,
+    so list them in that order when importing existing roles to avoid a spurious diff.
+
+    Example:
+    {
+      "app-compact" = {
+        actions = [{
+          action    = "COMPACT"
+          resources = [{ database_name = "app", collection_name = "" }]
+        }]
+        inherited_roles = [{ role_name = "read", database_name = "app" }]
+      }
+    }
+  EOT
+  type = map(object({
+    actions = optional(list(object({
+      action = string
+      resources = list(object({
+        cluster         = optional(bool)
+        database_name   = optional(string)
+        collection_name = optional(string)
+      }))
+    })), [])
+    inherited_roles = optional(list(object({
+      role_name     = string
+      database_name = string
+    })), [])
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for r in values(var.custom_db_roles) : length(r.actions) + length(r.inherited_roles) > 0])
+    error_message = "Each custom role must have at least one action or inherited role."
+  }
+}
+
+variable "ip_access_list" {
+  description = "Project IP access list keyed by CIDR block (e.g. 10.0.0.0/16) or single IP address."
+  type = map(object({
+    comment = optional(string)
+  }))
+  default = {}
+}
+
+variable "maintenance_window" {
+  description = <<-EOT
+    Project maintenance window. null leaves the window under Atlas control. day_of_week is 1 (Sunday)
+    through 7 (Saturday); hours are in the project's time zone. protected_hours blocks Atlas from
+    starting urgent maintenance during that range.
+  EOT
+  type = object({
+    day_of_week             = number
+    hour_of_day             = optional(number)
+    auto_defer_once_enabled = optional(bool)
+    protected_hours = optional(object({
+      start_hour_of_day = number
+      end_hour_of_day   = number
+    }))
+  })
+  default = null
+
+  validation {
+    condition     = var.maintenance_window == null || try(var.maintenance_window.day_of_week >= 1 && var.maintenance_window.day_of_week <= 7, false)
+    error_message = "maintenance_window.day_of_week must be between 1 (Sunday) and 7 (Saturday)."
+  }
 }

@@ -1,6 +1,6 @@
 # terraform-mongodbatlas-cluster
 
-A Terraform module for provisioning a production-ready MongoDB Atlas cluster with optional PrivateLink, automated backup schedules, and database user management.
+A Terraform module for provisioning a production-ready MongoDB Atlas cluster with optional PrivateLink, automated backup schedules, database users and roles, and project network access.
 
 ## Features
 
@@ -9,7 +9,11 @@ A Terraform module for provisioning a production-ready MongoDB Atlas cluster wit
 - Optional PrivateLink endpoint (AWS, Azure, GCP)
 - Configurable Cloud Backup Schedule with hourly, daily, weekly, and monthly policies
 - Optional Continuous Cloud Backup (point-in-time restore) and cross-region backup copy
-- Database users with SCRAM passwords or AWS IAM authentication, scoped to the cluster
+- Database users with SCRAM passwords or AWS IAM authentication, scoped to the cluster or an explicit list of clusters
+- Custom database roles
+- Project IP access list
+- Project maintenance window with protected hours
+- Termination protection and minimum oplog retention on the cluster
 - Supports MongoDB 6.0, 7.0, and 8.0
 - Plan-time validation for provider name, MongoDB version, and node count
 
@@ -140,6 +144,11 @@ See the [example](./example) directory for a complete runnable configuration.
 | backup_copy_region_name | Secondary region for backup copies | `string` | `null` | no |
 | database_users | Map of database users keyed by username (see below) | `map(object)` | `{}` | no |
 | database_user_passwords | Map of username to password for SCRAM users | `map(string)` (sensitive) | `{}` | no |
+| custom_db_roles | Map of custom database roles keyed by role name (see below) | `map(object)` | `{}` | no |
+| ip_access_list | Project IP access list keyed by CIDR block or IP address, with an optional `comment` | `map(object)` | `{}` | no |
+| maintenance_window | Project maintenance window (see below); `null` leaves it under Atlas control | `object` | `null` | no |
+| termination_protection_enabled | Block deletion of the cluster; `null` leaves the Atlas setting unchanged | `bool` | `null` | no |
+| oplog_min_retention_hours | Minimum oplog retention window in hours; `null` leaves the Atlas setting unchanged | `number` | `null` | no |
 
 ### mongodb_atlas_config
 
@@ -185,6 +194,7 @@ Keyed by username. Users are scoped to this cluster by default (`scope_to_cluste
 | aws_iam_type | `NONE`, `USER`, or `ROLE` | `string` | `"NONE"` |
 | description | User description | `string` | `null` |
 | scope_to_cluster | Restrict the user to this cluster only | `bool` | `true` |
+| scopes | List of `{ name, type }` (type `CLUSTER` or `DATA_LAKE`, default `CLUSTER`); overrides `scope_to_cluster`. `[]` grants access to every cluster in the project | `list(object)` | `null` |
 | labels | Key/value labels | `map(string)` | `{}` |
 
 ```hcl
@@ -210,6 +220,57 @@ terraform import 'module.mongodb.mongodbatlas_database_user.this["app-service"]'
 
 With no password in config, Terraform leaves the user's existing password unchanged. Setting one later rotates it.
 
+### custom_db_roles
+
+Keyed by role name. Database users can reference these roles; the module creates roles before users. `actions` is an ordered list in the provider, so when importing an existing role, list the actions in the order the Atlas API returns them.
+
+```hcl
+custom_db_roles = {
+  "app-maintenance" = {
+    actions = [{
+      action    = "COMPACT"
+      resources = [{ database_name = "app", collection_name = "" }]
+    }]
+    inherited_roles = [{ role_name = "read", database_name = "app" }]
+  }
+}
+```
+
+### maintenance_window
+
+`day_of_week` is 1 (Sunday) through 7 (Saturday). Hours are in the project's time zone.
+
+```hcl
+maintenance_window = {
+  day_of_week     = 1
+  hour_of_day     = 2
+  protected_hours = { start_hour_of_day = 9, end_hour_of_day = 21 }
+}
+```
+
+### Importing existing project resources
+
+Terraform 1.5+ `import` blocks in the root module can target resources inside this module:
+
+```hcl
+import {
+  to = module.mongodb.mongodbatlas_custom_db_role.this["app-maintenance"]
+  id = "<PROJECT_ID>-app-maintenance"
+}
+
+import {
+  to = module.mongodb.mongodbatlas_project_ip_access_list.this["10.0.0.0/16"]
+  id = "<PROJECT_ID>-10.0.0.0/16"
+}
+
+import {
+  to = module.mongodb.mongodbatlas_maintenance_window.this[0]
+  id = "<PROJECT_ID>"
+}
+```
+
+Declare `mongodb/mongodbatlas` in the root module's `required_providers` when using `import` blocks; otherwise Terraform resolves the import's provider as `hashicorp/mongodbatlas`.
+
 ## Outputs
 
 | Name | Description | Sensitive |
@@ -228,6 +289,7 @@ With no password in config, Terraform leaves the user's existing password unchan
 | backup_schedule_id | Cloud Backup Schedule ID (null if disabled) | no |
 | backup_schedule_details | Full backup schedule details (null if disabled) | yes |
 | database_usernames | Usernames of the managed database users | no |
+| custom_db_role_names | Names of the managed custom database roles | no |
 
 ## Requirements
 
@@ -253,8 +315,6 @@ curl --user "public-key:private-key" \
 
 - Add support for multi-region replication specs
 - Add support for sharded clusters
-- Add support for custom database roles
-- Add support for network access lists and IP allowlists
 - Add support for VPC peering
 
 ## License
